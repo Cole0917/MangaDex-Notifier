@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local data
+history.json
+config.json
+
+# VS Code
+.vscode/
