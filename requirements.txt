@@ -1,0 +1,6 @@
+aiohttp
+asyncio
+discord.py
+plyer
+pystray
+pillow
