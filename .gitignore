@@ -3,8 +3,7 @@ __pycache__/
 *.pyc
 
 # Local data
-history.json
-config.json
+config.py
 
 # VS Code
 .vscode/

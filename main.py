@@ -1,58 +1,51 @@
+import discord
 import asyncio
-import aiohttp
 import json
+
+import database
 import mangadex_api
 import notifier
-import storage
 
-# Checks for new chapters of followed manga in a loop, sending notifications when new chapters are found. It loads the history of notified chapters and saves it after each check to avoid duplicate notifications.
-async def check_loop(session, token, interval):
-    history = await storage.load_history()
-    with open("config.json") as f:
-        config = json.load(f)
-    discord_token = config.get("discord_bot_token")
-    discord_channel = config.get("discord_channel_id")
+from discord.ext import commands
+from config import config
 
-    if discord_token and discord_channel:
-        notifier.setup_discord(discord_token, discord_channel)
+intents = discord.Intents.default()
 
-    manga_list = await mangadex_api.get_followed_manga(session, token)
-    print(f"Tracking {len(manga_list)} manga")
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-    while True:
-        tasks = []
-        for manga in manga_list:
-            tasks.append(check_manga(session, manga, history))
-        await asyncio.gather(*tasks)
-        await storage.save_history(history)
-        await asyncio.sleep(interval)
+CHECK_INTERVAL = config["check_interval"]
 
-# Checks for new chapters of a specific manga and sends notifications if a new chapter is found. It updates the history to keep track of the latest chapter notified.
-async def check_manga(session, manga, history):
-    manga_id = manga["id"]
-    title = manga["title"]
-    chapter = await mangadex_api.get_latest_chapter(session, manga_id)
-    if not chapter:
-        return
+# This function will run in the background and check for manga updates every CHECK_INTERVAL seconds
+async def check_updates():
+    while not bot.is_closed():
+        guild_list = await database.get_all_guilds()  # get all guilds as a list
+        for guild in guild_list:
+            channel_id = guild.get("channel_id")
+            if not channel_id:
+                continue
 
-    if manga_id not in history or history[manga_id] != chapter:
-        history[manga_id] = chapter
-        notifier.send_desktop(title, chapter)
-        await notifier.send_discord(title, chapter)
-        print(f"New chapter: {title} {chapter}")
+            channel = bot.get_channel(int(channel_id))
 
-# Main entry point of the program, which loads the configuration, logs into MangaDex, and starts the check loop to monitor for new manga chapters.
-async def main():
-    with open("config.json") as f:
-        config = json.load(f)
+            for manga in guild["manga"]:
+                latest = await mangadex_api.get_latest_chapter(manga["id"])
+                if not latest:
+                    continue
+                if latest["chapter"] != manga["last_chapter"]:
+                    link = f"https://mangadex.org/chapter/{latest['id']}"
+                    await notifier.send_update(
+                        channel,
+                        manga["title"],
+                        latest["chapter"],
+                        link
+                    )
 
-    interval = config.get("check_interval", 600)
-    username = config["username"]
-    password = config["password"]
+        await asyncio.sleep(CHECK_INTERVAL)
 
-    async with aiohttp.ClientSession() as session:
-        token = await mangadex_api.login(session, username, password)
-        await check_loop(session, token, interval)
+# Command to set the channel for updates
+@bot.event
+async def on_ready():
+    print("Bot online:", bot.user)
+    asyncio.create_task(check_updates())
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Run the bot
+bot.run(config["discord_token"])

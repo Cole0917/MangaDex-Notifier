@@ -1,38 +1,42 @@
 import aiohttp
-import asyncio
 
 BASE_URL = "https://api.mangadex.org"
 
-# Fetches an authentication token for the user using their username and password, returning the session token if successful.
-async def login(session, username, password):
-    url = f"{BASE_URL}/auth/login"
-    async with session.post(url, json={"username": username, "password": password}) as resp:
-        data = await resp.json()
-        return data["token"]["session"]
+# Gets manga details such as the title for a given manga ID by sending a GET request to the MangaDex API. It retrieves the manga's title in English if available; otherwise, it defaults to "Unknown". The function returns the manga title as a string.
+async def get_manga(manga_id):
 
-# Fetches the list of manga followed by the user, returning a list of dictionaries containing manga IDs and titles.
-async def get_followed_manga(session, token):
-    headers = {"Authorization": f"Bearer {token}"}
-    url = f"{BASE_URL}/user/follows/manga"
-    async with session.get(url, headers=headers) as resp:
-        data = await resp.json()
-        manga = []
-        for item in data["data"]:
-            title = list(item["attributes"]["title"].values())[0]
-            manga.append({"id": item["id"], "title": title})
-        return manga
+    async with aiohttp.ClientSession() as session:
+        url = f"{BASE_URL}/manga/{manga_id}"
 
-# Fetches the latest chapter number for a given manga ID, returning None if no chapters are found.
-async def get_latest_chapter(session, manga_id):
-    url = f"{BASE_URL}/chapter"
-    params = {
-        "manga": manga_id,
-        "limit": 1,
-        "translatedLanguage[]": "en",
-        "order[chapter]": "desc"
-    }
-    async with session.get(url, params=params) as resp:
-        data = await resp.json()
-        if not data["data"]:
-            return None
-        return data["data"][0]["attributes"]["chapter"]
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+            title = data["data"]["attributes"]["title"].get("en", "Unknown")
+
+            return title
+
+# Fetches the latest chapter information for a given manga ID from the MangaDex API. It sends a GET request to the manga feed endpoint, requesting only the most recent chapter in English. If a chapter is found, it returns a dictionary containing the chapter's ID and chapter number; otherwise, it returns None.
+async def get_latest_chapter(manga_id):
+
+    async with aiohttp.ClientSession() as session:
+
+        url = f"{BASE_URL}/manga/{manga_id}/feed"
+
+        params = {
+            "limit": 1,
+            "translatedLanguage[]": "en",
+            "order[publishAt]": "desc"
+        }
+
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+
+            if not data["data"]:
+                return None
+
+            chapter = data["data"][0]
+
+            return {
+                "id": chapter["id"],
+                "chapter": chapter["attributes"]["chapter"]
+            }
