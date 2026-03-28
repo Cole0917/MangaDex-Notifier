@@ -18,19 +18,22 @@ CHECK_INTERVAL = config["check_interval"]
 # This function will run in the background and check for manga updates every CHECK_INTERVAL seconds
 async def check_updates():
     while not bot.is_closed():
-        guild_list = await database.get_all_guilds()  # get all guilds as a list
-        for guild in guild_list:
-            channel_id = guild.get("channel_id")
+        users_list = await database.get_all_users()  # get all users as a list
+        for user in users_list:
+            channel_id = user.get("channel_id")
             if not channel_id:
                 continue
 
             channel = bot.get_channel(int(channel_id))
+            if channel is None:
+                continue
 
-            for manga in guild["manga"]:
+            for manga in user.get("manga", []):
                 latest = await mangadex_api.get_latest_chapter(manga["id"])
                 if not latest:
                     continue
-                if latest["chapter"] != manga["last_chapter"]:
+
+                if manga.get("last_chapter") is None or latest["chapter"] != manga.get("last_chapter"):
                     link = f"https://mangadex.org/chapter/{latest['id']}"
                     await notifier.send_update(
                         channel,
@@ -39,6 +42,8 @@ async def check_updates():
                         link,
                         manga["id"]
                     )
+                    # Update last known chapter
+                    await database.update_manga_chapter(user.get("user_id"), manga["id"], latest["chapter"])
 
         await asyncio.sleep(CHECK_INTERVAL)
 
