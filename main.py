@@ -36,15 +36,34 @@ async def check_updates():
                         channel,
                         manga["title"],
                         latest["chapter"],
-                        link
+                        link,
+                        manga["id"]
                     )
 
         await asyncio.sleep(CHECK_INTERVAL)
 
-# Command to set the channel for updates
+# When the bot is ready, it will print a message and start the background task to check for updates
 @bot.event
 async def on_ready():
     print("Bot online:", bot.user)
+    
+    # Load slash command cog
+    try:
+        await bot.load_extension("commands")
+        print("Loaded commands cog")
+    except Exception as e:
+        print(f"Failed to load commands cog: {e}")
+    
+    # Sync application commands with Discord
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} application commands")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+    
+    # Set bot status
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="/help"))
+    
     asyncio.create_task(check_updates())
 
 # Run the bot
