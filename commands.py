@@ -1,14 +1,14 @@
 import discord
 from discord.ext import commands
 import aiohttp
-import json
-import os
 import random
 
+import database
+import mangadex_api
+
 class MangaListView(discord.ui.View):
-    def __init__(self, user_id, manga_items, page_size, total_pages):
+    def __init__(self, manga_items, page_size, total_pages):
         super().__init__(timeout=300)
-        self.user_id = user_id
         self.manga_items = manga_items
         self.page_size = page_size
         self.total_pages = total_pages
@@ -20,7 +20,7 @@ class MangaListView(discord.ui.View):
         page_items = self.manga_items[start:end]
 
         embed = discord.Embed(title=f"{interaction.user.name}'s Followed Manga (page {self.current_page}/{self.total_pages})", color=discord.Color.green())
-        for idx, (manga_id, manga_data) in enumerate(page_items, start + 1):
+        for idx, manga_data in enumerate(page_items, start + 1):
             embed.add_field(name=f"{idx}. {manga_data['title']}", value=manga_data["url"], inline=False)
 
         if self.total_pages > 1:
@@ -43,32 +43,6 @@ class MangaListView(discord.ui.View):
 class MangaDexCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.followed_file = "followed_manga.json"
-        self.channels_file = "user_channels.json"
-        self.load_followed()
-        self.load_channels()
-
-    def load_followed(self):
-        if os.path.exists(self.followed_file):
-            with open(self.followed_file, "r") as f:
-                self.followed_manga = json.load(f)
-        else:
-            self.followed_manga = {}
-
-    def save_followed(self):
-        with open(self.followed_file, "w") as f:
-            json.dump(self.followed_manga, f, indent=2)
-
-    def load_channels(self):
-        if os.path.exists(self.channels_file):
-            with open(self.channels_file, "r") as f:
-                self.user_channels = json.load(f)
-        else:
-            self.user_channels = {}
-
-    def save_channels(self):
-        with open(self.channels_file, "w") as f:
-            json.dump(self.user_channels, f, indent=2)
 
     # Define slash commands for help, following, follow, and setchannel
     @discord.app_commands.command(name="help", description="Display list of all commands")
@@ -83,35 +57,35 @@ class MangaDexCommands(commands.Cog):
         embed.add_field(name="/coinflip", value="Flip a coin - Heads or Tails", inline=False)
         await interaction.response.send_message(embed=embed)
 
-    # Command to display followed manga for the user
+    # Command to display followed manga for the guild
     @discord.app_commands.command(name="following", description="Display followed manga")
-    async def following_command(self, interaction: discord.Interaction, page: int = 1):
-        user_id = str(interaction.user.id)
-        if user_id not in self.followed_manga or not self.followed_manga[user_id]:
-            await interaction.response.send_message("You are not following any manga yet!")
+    async def following_command(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild_id)
+        guild_data = await database.get_guild(guild_id)
+        manga_items = guild_data.get("manga", [])
+
+        if not manga_items:
+            await interaction.response.send_message("No manga is being followed in this server yet.")
             return
 
-        manga_items = list(self.followed_manga[user_id].items())
         page_size = 10
         total = len(manga_items)
         total_pages = (total + page_size - 1) // page_size
+        view = MangaListView(manga_items, page_size, total_pages)
 
-        if page < 1 or page > total_pages:
-            await interaction.response.send_message(f"Invalid page number. Choose between 1 and {total_pages}.")
-            return
-
-        start = (page - 1) * page_size
-        end = start + page_size
+        # Display first page initially
+        start = 0
+        end = min(page_size, total)
         page_items = manga_items[start:end]
 
-        embed = discord.Embed(title=f"{interaction.user.name}'s Followed Manga (page {page}/{total_pages})", color=discord.Color.green())
-        for idx, (manga_id, manga_data) in enumerate(page_items, start + 1):
-            embed.add_field(name=f"{idx}. {manga_data['title']}", value=manga_data["url"], inline=False)
+        embed = discord.Embed(title=f"{interaction.user.name}'s Followed Manga (page 1/{total_pages})", color=discord.Color.green())
+        for idx, manga_data in enumerate(page_items, 1):
+            embed.add_field(name=f"{idx}. {manga_data['title']}", value=manga_data['url'], inline=False)
 
         if total_pages > 1:
-            embed.set_footer(text=f"Use /following <page> to see other pages. Total items: {total}")
+            embed.set_footer(text=f"Total items: {total}")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, view=view)
 
     # Command to follow a manga by URL
     @discord.app_commands.command(name="follow", description="Follow a manga")
@@ -140,12 +114,22 @@ class MangaDexCommands(commands.Cog):
                     else:
                         manga_title = titles or "Unknown Manga"
 
-            user_id = str(interaction.user.id)
-            if user_id not in self.followed_manga:
-                self.followed_manga[user_id] = {}
+            guild_id = str(interaction.guild_id)
+            existing_guild = await database.get_guild(guild_id)
+            existing_mangas = existing_guild.get("manga", [])
+            if any(item.get("id") == manga_id for item in existing_mangas):
+                await interaction.response.send_message("This manga is already being followed in this server.")
+                return
 
-            self.followed_manga[user_id][manga_id] = {"title": manga_title, "url": manga_url}
-            self.save_followed()
+            chapter_info = await mangadex_api.get_latest_chapter(manga_id)
+            last_chapter = chapter_info["chapter"] if chapter_info else None
+
+            await database.add_manga(guild_id, {
+                "id": manga_id,
+                "title": manga_title,
+                "url": manga_url,
+                "last_chapter": last_chapter
+            })
 
             await interaction.response.send_message(f"✅ Added **{manga_title}** to your followed list!")
         except Exception as e:
@@ -159,9 +143,8 @@ class MangaDexCommands(commands.Cog):
                 await interaction.response.send_message("You need administrator permissions to use this command.", ephemeral=True)
                 return
 
-            user_id = str(interaction.user.id)
-            self.user_channels[user_id] = str(channel.id)
-            self.save_channels()
+            guild_id = str(interaction.guild_id)
+            await database.set_channel(guild_id, channel.id)
             await interaction.response.send_message(f"✅ Notification channel set to {channel.mention}")
         except Exception as e:
             await interaction.response.send_message(f"Error: {str(e)}")
@@ -176,19 +159,19 @@ class MangaDexCommands(commands.Cog):
     @discord.app_commands.command(name="remove", description="Remove manga from your followed list by number")
     async def remove_command(self, interaction: discord.Interaction, index: int):
         try:
-            user_id = str(interaction.user.id)
-            if user_id not in self.followed_manga or not self.followed_manga[user_id]:
-                await interaction.response.send_message("Your followed list is empty.")
+            guild_id = str(interaction.guild_id)
+            guild_data = await database.get_guild(guild_id)
+            manga_items = guild_data.get("manga", [])
+            if not manga_items:
+                await interaction.response.send_message("No manga is being followed in this server yet.")
                 return
 
-            if index < 1 or index > len(self.followed_manga[user_id]):
+            if index < 1 or index > len(manga_items):
                 await interaction.response.send_message("Invalid number. Use /following to see the list and indexing.")
                 return
 
-            manga_items = list(self.followed_manga[user_id].items())
-            manga_id, manga_data = manga_items[index - 1]
-            del self.followed_manga[user_id][manga_id]
-            self.save_followed()
+            manga_data = manga_items[index - 1]
+            await database.remove_manga(guild_id, manga_data.get("id"))
             await interaction.response.send_message(f"✅ Removed **{manga_data['title']}** from your followed list.")
         except Exception as e:
             await interaction.response.send_message(f"Error: {str(e)}")
@@ -197,20 +180,20 @@ class MangaDexCommands(commands.Cog):
     @discord.app_commands.command(name="checkcurrentchapter", description="Check the latest chapter of a manga in your followed list")
     async def checkcurrentchapter_command(self, interaction: discord.Interaction, index: int):
         try:
-            user_id = str(interaction.user.id)
-            if user_id not in self.followed_manga or not self.followed_manga[user_id]:
-                await interaction.response.send_message("Your followed list is empty.")
+            guild_id = str(interaction.guild_id)
+            guild_data = await database.get_guild(guild_id)
+            manga_items = guild_data.get("manga", [])
+            if not manga_items:
+                await interaction.response.send_message("No manga is being followed in this server yet.")
                 return
 
-            if index < 1 or index > len(self.followed_manga[user_id]):
+            if index < 1 or index > len(manga_items):
                 await interaction.response.send_message("Manga not available in your list!")
                 return
 
-            manga_items = list(self.followed_manga[user_id].items())
-            manga_id, manga_data = manga_items[index - 1]
+            manga_data = manga_items[index - 1]
+            manga_id = manga_data.get("id")
 
-            # Import mangadex_api to get latest chapter
-            import mangadex_api
             latest = await mangadex_api.get_latest_chapter(manga_id)
             if not latest:
                 await interaction.response.send_message("Unable to fetch latest chapter information.")

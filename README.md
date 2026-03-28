@@ -20,7 +20,9 @@ python main.py
 - `/help` – show all available commands
 - `/following` – list your manga follows
 - `/follow <manga_url>` – follow MangaDex manga (supports `/title/` and `/manga/` URL formats)
-- `/setchannel <channel>` – configure update channel for the invoking user
+- `/setchannel <channel>` – configure update channel in Discord for the invoking user
+- `/checkcurrentchapter <number>` - check for a current chapter of a followed manga
+- `/remove <number>` - remove a manga from your followed list by its index in /following
 - `/coinflip` – 50/50 Heads/Tails response
 
 
